@@ -52,7 +52,7 @@ jobs:
   search:
     needs: setup
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 360 }}
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
