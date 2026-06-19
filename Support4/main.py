@@ -25,7 +25,7 @@ from os import path
 
 from fast_search import (
     check_pair_batch, fast_tasks, total_batches, total_instances,
-    format_instance,
+    format_instance, CANONICAL_SEARCH,
 )
 from instance import DISTRIBUTIONS
 
@@ -129,6 +129,10 @@ def main():
     parser.add_argument('--sleep', type=float, default=0,
                         help='Seconds to sleep between batches (CPU throttling). Default: 0')
     parser.add_argument('--no-resume', action='store_true')
+    parser.add_argument('--task-start', type=int, default=0,
+                        help='First task_id to process (inclusive). For matrix splitting.')
+    parser.add_argument('--task-end', type=int, default=None,
+                        help='Last task_id to process (exclusive). For matrix splitting.')
     args = parser.parse_args()
 
     if args.all:
@@ -147,8 +151,12 @@ def main():
     db_path = checkpoint_file(args.output)
     conn = init_checkpoint(db_path)
     done_ids = set() if args.no_resume else completed_task_ids(conn)
-    expected = total_instances(len(distributions))
-    expected_batches = total_batches(len(distributions))
+    all_expected = total_instances(len(distributions))
+    all_expected_batches = total_batches(len(distributions))
+    task_end = args.task_end if args.task_end is not None else all_expected_batches
+
+    expected_batches_in_range = max(0, task_end - args.task_start)
+    expected = expected_batches_in_range * len(CANONICAL_SEARCH[distributions[0]]['exc_masks']) if distributions else 0
 
     total_checked = sum(
         row[0] for row in conn.execute("SELECT checked FROM completed_batches")
@@ -166,13 +174,16 @@ def main():
     def pending():
         for task in fast_tasks(distributions):
             tid = task[0]
+            if tid < args.task_start or tid >= task_end:
+                continue
             if tid not in done_ids:
                 yield task
 
     print(f"Searching {len(distributions)} distribution(s), {workers} worker(s)")
     if args.sleep > 0:
         print(f"CPU throttling: {args.sleep}s sleep between batches")
-    print(f"Total instances to check: {expected:,}")
+    print(f"Task range: [{args.task_start}, {task_end}) of {all_expected_batches}")
+    print(f"Instances in range: {expected:,}")
     print(f"Checkpoint: {db_path}")
     print()
 

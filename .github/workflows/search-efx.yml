@@ -1,0 +1,110 @@
+name: EFX/EFR Search - Distribution (3,2,2,1)
+
+on:
+  workflow_dispatch:
+    inputs:
+      num_jobs:
+        description: 'Number of parallel matrix jobs'
+        required: false
+        default: '100'
+      workers_per_job:
+        description: 'Workers per job (multiprocessing)'
+        required: false
+        default: '2'
+      timeout_minutes:
+        description: 'Timeout per job in minutes'
+        required: false
+        default: '360'
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 360 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(steps.setup.outputs.shards) }}
+    steps:
+      - name: Setup matrix
+        id: setup
+        run: |
+          NUM_JOBS=${{ github.event.inputs.num_jobs || 100 }}
+          TOTAL_BATCHES=1053696
+          BATCH_SIZE=$(( (TOTAL_BATCHES + NUM_JOBS - 1) / NUM_JOBS ))
+          SHARDS="["
+          for ((i=0; i<NUM_JOBS; i++)); do
+            START=$((i * BATCH_SIZE))
+            END=$(( (i+1) * BATCH_SIZE ))
+            if [ $END -gt $TOTAL_BATCHES ]; then
+              END=$TOTAL_BATCHES
+            fi
+            if [ $START -ge $TOTAL_BATCHES ]; then
+              break
+            fi
+            if [ $i -gt 0 ]; then
+              SHARDS="$SHARDS,"
+            fi
+            SHARDS="$SHARDS\"$START,$END\""
+          done
+          SHARDS="$SHARDS]"
+          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run search
+        run: |
+          IFS=',' read -r START END <<< "${{ matrix.shard }}"
+          OUTPUT="results_shard_${START}"
+          python main.py \
+            --dist 3 2 2 1 \
+            --workers ${{ github.event.inputs.workers_per_job || 2 }} \
+            --task-start "$START" \
+            --task-end "$END" \
+            --output "$OUTPUT" \
+            --no-resume
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.shard }}
+          path: |
+            results_shard_*.txt
+            results_shard_*.txt.checkpoint.sqlite3
+          retention-days: 30
+
+  merge-results:
+    needs: search
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: all-results
+
+      - name: Merge results
+        run: |
+          echo "=== EFR-not-EFX counterexamples ===" > merged_results.txt
+          cat all-results/*_efr_not_efx.txt >> merged_results.txt 2>/dev/null || true
+          echo "" >> merged_results.txt
+          echo "=== Neither EFX nor EFR ===" >> merged_results.txt
+          cat all-results/*_neither.txt >> merged_results.txt 2>/dev/null || true
+
+          EFR_NOT_EFX=$(grep -c "Distribution:" all-results/*_efr_not_efx.txt 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+          NEITHER=$(grep -c "Distribution:" all-results/*_neither.txt 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+          echo "Counterexamples found: efr_not_efx=$EFR_NOT_EFX, neither=$NEITHER"
+
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-results
+          path: merged_results.txt
+          retention-days: 90
