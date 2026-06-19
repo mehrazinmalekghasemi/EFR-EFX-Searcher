@@ -1,4 +1,4 @@
-name: EFX/EFR Search - Distribution (3,2,2,1)
+name: EFX/EFR Search - Distribution (2,2,2,2)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       num_jobs:
         description: 'Number of parallel matrix jobs'
         required: false
-        default: '100'
+        default: '50'
       workers_per_job:
         description: 'Workers per job (multiprocessing)'
         required: false
@@ -25,8 +25,8 @@ jobs:
       - name: Generate shard list
         id: shard
         run: |
-          NUM_JOBS=${{ github.event.inputs.num_jobs || 100 }}
-          TOTAL_BATCHES=1053696
+          NUM_JOBS=${{ github.event.inputs.num_jobs || 50 }}
+          TOTAL_BATCHES=333396
           BATCH_SIZE=$(( (TOTAL_BATCHES + NUM_JOBS - 1) / NUM_JOBS ))
           SHARDS="["
           FIRST=true
@@ -71,10 +71,11 @@ jobs:
       - name: Run search
         working-directory: Support4
         run: |
+          mkdir -p results
           IFS=',' read -r START END <<< "${{ matrix.shard }}"
-          OUTPUT="results_shard_${START}"
+          OUTPUT="results/shard_${START}"
           python main.py \
-            --dist 3 2 2 1 \
+            --dist 2 2 2 2 \
             --workers ${{ github.event.inputs.workers_per_job || 2 }} \
             --task-start "$START" \
             --task-end "$END" \
@@ -86,7 +87,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: results-${{ strategy.job-index }}
-          path: Support4/results_shard_*
+          path: Support4/results/
           retention-days: 30
 
   merge-results:
@@ -104,11 +105,12 @@ jobs:
 
       - name: Merge results
         run: |
-          echo "=== EFR-not-EFX counterexamples ===" > merged_results.txt
-          cat all-results/*_efr_not_efx.txt >> merged_results.txt 2>/dev/null || true
-          echo "" >> merged_results.txt
-          echo "=== Neither EFX nor EFR ===" >> merged_results.txt
-          cat all-results/*_neither.txt >> merged_results.txt 2>/dev/null || true
+          mkdir -p results
+          echo "=== EFR-not-EFX counterexamples ===" > results/merged_results.txt
+          cat all-results/*_efr_not_efx.txt >> results/merged_results.txt 2>/dev/null || true
+          echo "" >> results/merged_results.txt
+          echo "=== Neither EFX nor EFR ===" >> results/merged_results.txt
+          cat all-results/*_neither.txt >> results/merged_results.txt 2>/dev/null || true
 
           EFR_NOT_EFX=$(grep -c "Distribution:" all-results/*_efr_not_efx.txt 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
           NEITHER=$(grep -c "Distribution:" all-results/*_neither.txt 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
@@ -118,5 +120,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: merged-results
-          path: merged_results.txt
+          path: results/
           retention-days: 90
