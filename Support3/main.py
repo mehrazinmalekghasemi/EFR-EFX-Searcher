@@ -256,7 +256,8 @@ def run_parallel(instances, output_file, workers, fail_only=False, chunksize=100
             print(f"  {category}: {category_counts[category]} -> {path}")
 
 
-def run_fast_fail_only(distributions, output_file, workers, chunksize=1, resume=True):
+def run_fast_fail_only(distributions, output_file, workers, chunksize=1, resume=True,
+                        task_start=0, task_end=None):
     next_report = 100000
     output_files = split_output_files(output_file)
     db_path = checkpoint_file(output_file)
@@ -271,6 +272,10 @@ def run_fast_fail_only(distributions, output_file, workers, chunksize=1, resume=
     def pending_tasks():
         for task in fast_tasks(distributions):
             task_id = task[0]
+            if task_id < task_start:
+                continue
+            if task_end is not None and task_id >= task_end:
+                continue
             if task_id not in done_ids:
                 yield task
 
@@ -314,21 +319,13 @@ def run_fast_fail_only(distributions, output_file, workers, chunksize=1, resume=
                         pool.terminate()
                         break
     finally:
-        completed_batches = conn.execute("SELECT COUNT(*) FROM completed_batches").fetchone()[0]
-        if completed_batches == expected_batches or have_both_failures():
-            category_counts = rebuild_split_outputs(conn, output_files)
-            written = sum(category_counts.values())
-            print(f"Done. Checked {checked} instances, wrote {written} to {output_file}.")
-            print(f"Total instances expected: {expected}")
-            print(f"Total allocation checks worst-case: {expected * 1400}")
-            for category, output_path in output_files.items():
-                print(f"  {category}: {category_counts[category]} -> {output_path}")
-        else:
-            print(
-                f"Stopped with {checked}/{expected} instances complete. "
-                f"Resume with the same command."
-            )
-            print(f"Checkpoint: {db_path}")
+        category_counts = rebuild_split_outputs(conn, output_files)
+        written = sum(category_counts.values())
+        print(f"Done. Checked {checked} instances, wrote {written} to {output_file}.")
+        print(f"Total instances expected: {expected}")
+        print(f"Total allocation checks worst-case: {expected * 1400}")
+        for category, output_path in output_files.items():
+            print(f"  {category}: {category_counts[category]} -> {output_path}")
         conn.close()
 
 
@@ -350,6 +347,10 @@ def main():
                         help='Instances sent to each worker per batch. Default: 100')
     parser.add_argument('--no-resume', action='store_true',
                         help='Ignore any existing fast-path checkpoint')
+    parser.add_argument('--task-start', type=int, default=0,
+                        help='First task_id to process (inclusive). For matrix splitting.')
+    parser.add_argument('--task-end', type=int, default=None,
+                        help='Last task_id to process (exclusive). For matrix splitting.')
     args = parser.parse_args()
 
     if args.all:
@@ -381,7 +382,8 @@ def main():
     if args.fail_only and args.split_results:
         print("Using compact batched fast path")
         run_fast_fail_only(distributions, args.output, workers, args.chunksize,
-                           resume=not args.no_resume)
+                           resume=not args.no_resume,
+                           task_start=args.task_start, task_end=args.task_end)
     elif workers == 1:
         run(instances, args.output, fail_only=args.fail_only,
             split_results=args.split_results)
