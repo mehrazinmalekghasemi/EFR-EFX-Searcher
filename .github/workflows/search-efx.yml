@@ -17,21 +17,19 @@ on:
         default: '360'
 
 jobs:
-  search:
+  setup:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 360 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(steps.setup.outputs.shards) }}
+    outputs:
+      shards: ${{ steps.shard.outputs.shards }}
     steps:
-      - name: Setup matrix
-        id: setup
+      - name: Generate shard list
+        id: shard
         run: |
           NUM_JOBS=${{ github.event.inputs.num_jobs || 100 }}
           TOTAL_BATCHES=1053696
           BATCH_SIZE=$(( (TOTAL_BATCHES + NUM_JOBS - 1) / NUM_JOBS ))
           SHARDS="["
+          FIRST=true
           for ((i=0; i<NUM_JOBS; i++)); do
             START=$((i * BATCH_SIZE))
             END=$(( (i+1) * BATCH_SIZE ))
@@ -41,7 +39,9 @@ jobs:
             if [ $START -ge $TOTAL_BATCHES ]; then
               break
             fi
-            if [ $i -gt 0 ]; then
+            if [ "$FIRST" = true ]; then
+              FIRST=false
+            else
               SHARDS="$SHARDS,"
             fi
             SHARDS="$SHARDS\"$START,$END\""
@@ -49,13 +49,27 @@ jobs:
           SHARDS="$SHARDS]"
           echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
 
+  search:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 360 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
+    steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
+      - name: Compile C extension
+        run: cc -O3 -shared -fPIC -o checker.so checker.c
+        working-directory: Support4
+
       - name: Run search
+        working-directory: Support4
         run: |
           IFS=',' read -r START END <<< "${{ matrix.shard }}"
           OUTPUT="results_shard_${START}"
@@ -71,10 +85,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: results-${{ matrix.shard }}
-          path: |
-            results_shard_*.txt
-            results_shard_*.txt.checkpoint.sqlite3
+          name: results-${{ strategy.job-index }}
+          path: Support4/results_shard_*
           retention-days: 30
 
   merge-results:
