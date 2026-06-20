@@ -1,4 +1,4 @@
-name: EFX/EFR Search - Support5 (5 types: 2,2,2,1,1)
+name: "EFX/EFR Search - Support5 (5 types: 2,2,2,1,1)"
 
 on:
   workflow_dispatch:
