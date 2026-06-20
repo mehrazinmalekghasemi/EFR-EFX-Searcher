@@ -1,0 +1,58 @@
+name: Search EFX/EFR Counterexamples (Support5)
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_pair_val:
+        description: 'Maximum pair value (1-6)'
+        required: false
+        default: '6'
+      workers:
+        description: 'Number of workers (0=all cores)'
+        required: false
+        default: '2'
+  push:
+    paths:
+      - 'Support5/**'
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compile C extension
+        working-directory: Support5
+        run: cc -O3 -shared -fPIC -o checker.so checker.c
+
+      - name: Restore checkpoint
+        uses: actions/cache@v4
+        with:
+          path: Support5/results.txt.checkpoint.sqlite3
+          key: support5-checkpoint-${{ github.run_id }}
+          restore-keys: |
+            support5-checkpoint-
+
+      - name: Run search
+        working-directory: Support5
+        run: |
+          python main.py --all \
+            --workers ${{ github.event.inputs.workers || '2' }} \
+            --max-pair-val ${{ github.event.inputs.max_pair_val || '6' }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: support5-results
+          path: |
+            Support5/results*.txt
+            Support5/results.txt.checkpoint.sqlite3
+          retention-days: 30
