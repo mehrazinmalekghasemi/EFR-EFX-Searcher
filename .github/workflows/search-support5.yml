@@ -15,10 +15,6 @@ on:
         description: 'Workers per job (multiprocessing)'
         required: false
         default: '2'
-      timeout_minutes:
-        description: 'Timeout per job in minutes'
-        required: false
-        default: '360'
 
 jobs:
   setup:
@@ -31,22 +27,12 @@ jobs:
         id: shard
         run: |
           MAX_PV=${{ github.event.inputs.max_pair_val || 4 }}
+          NUM_JOBS=${{ github.event.inputs.num_jobs || 100 }}
 
-          # Compute total batches from max_pair_val
-          # nseq = n*(n+1)*(n+2)/6 where n = max_pair_val
-          # total_batches = nseq^4 * max_pair_val
-          python3 -c "
-          n = int('$MAX_PV')
-          nseq = n * (n+1) * (n+2) // 6
-          total = nseq ** 4 * n
-          print(total)
-          " > /tmp/total_batches.txt
-
-          TOTAL_BATCHES=$(cat /tmp/total_batches.txt)
+          TOTAL_BATCHES=$(python3 -c "n=$MAX_PV; print(n**4 * n * (n+1)**4 * (n+2)**4 // 6**4)")
           echo "total_batches=$TOTAL_BATCHES" >> "$GITHUB_OUTPUT"
           echo "Total batches for max_pair_val=$MAX_PV: $TOTAL_BATCHES"
 
-          NUM_JOBS=${{ github.event.inputs.num_jobs || 100 }}
           BATCH_SIZE=$(( (TOTAL_BATCHES + NUM_JOBS - 1) / NUM_JOBS ))
 
           SHARDS="["
@@ -74,7 +60,7 @@ jobs:
   search:
     needs: setup
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 360 }}
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
