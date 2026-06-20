@@ -1,4 +1,4 @@
-name: "EFX/EFR Search - Support5 (5 types: 2,2,2,1,1)"
+name: EFX/EFR Search - Support5
 
 on:
   workflow_dispatch:
@@ -21,18 +21,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       shards: ${{ steps.shard.outputs.shards }}
-      total_batches: ${{ steps.shard.outputs.total_batches }}
     steps:
       - name: Generate shard list
         id: shard
         run: |
-          MAX_PV=${{ github.event.inputs.max_pair_val || 4 }}
-          NUM_JOBS=${{ github.event.inputs.num_jobs || 100 }}
+          MPV="${{ github.event.inputs.max_pair_val }}"
+          MPV="${MPV:-4}"
+          NUM_JOBS="${{ github.event.inputs.num_jobs }}"
+          NUM_JOBS="${NUM_JOBS:-100}"
 
-          TOTAL_BATCHES=$(python3 -c "n=$MAX_PV; print(n**4 * n * (n+1)**4 * (n+2)**4 // 6**4)")
-          echo "total_batches=$TOTAL_BATCHES" >> "$GITHUB_OUTPUT"
-          echo "Total batches for max_pair_val=$MAX_PV: $TOTAL_BATCHES"
+          TOTAL_BATCHES=$(python3 -c "
+          n = int('${MPV}')
+          nseq = n * (n+1) * (n+2) // 6
+          print(nseq ** 4 * n)
+          ")
 
+          echo "Total batches: $TOTAL_BATCHES"
           BATCH_SIZE=$(( (TOTAL_BATCHES + NUM_JOBS - 1) / NUM_JOBS ))
 
           SHARDS="["
@@ -40,10 +44,10 @@ jobs:
           for ((i=0; i<NUM_JOBS; i++)); do
             START=$((i * BATCH_SIZE))
             END=$(( (i+1) * BATCH_SIZE ))
-            if [ $END -gt $TOTAL_BATCHES ]; then
+            if [ "$END" -gt "$TOTAL_BATCHES" ]; then
               END=$TOTAL_BATCHES
             fi
-            if [ $START -ge $TOTAL_BATCHES ]; then
+            if [ "$START" -ge "$TOTAL_BATCHES" ]; then
               break
             fi
             if [ "$FIRST" = true ]; then
@@ -55,7 +59,6 @@ jobs:
           done
           SHARDS="$SHARDS]"
           echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
-          echo "Shards: $SHARDS"
 
   search:
     needs: setup
@@ -82,10 +85,14 @@ jobs:
           mkdir -p results
           IFS=',' read -r START END <<< "${{ matrix.shard }}"
           OUTPUT="results/shard_${START}"
+          MPV="${{ github.event.inputs.max_pair_val }}"
+          MPV="${MPV:-4}"
+          WPP="${{ github.event.inputs.workers_per_job }}"
+          WPP="${WPP:-2}"
           python main.py \
             --all \
-            --workers ${{ github.event.inputs.workers_per_job || 2 }} \
-            --max-pair-val ${{ github.event.inputs.max_pair_val || 4 }} \
+            --workers "$WPP" \
+            --max-pair-val "$MPV" \
             --task-start "$START" \
             --task-end "$END" \
             --output "$OUTPUT" \
