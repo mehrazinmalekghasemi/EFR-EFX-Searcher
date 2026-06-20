@@ -62,12 +62,12 @@ dkms.conf
 # Search results and output
 results*.txt
 results/
-failures*.txt
+*failures*.txt
 output*.txt
 
 # Local run artifacts
-run.log
-run.pid
+*run.log
+*run.pid
 
 # macOS
 .DS_Store
