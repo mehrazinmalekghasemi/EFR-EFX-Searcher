@@ -1,4 +1,4 @@
-name: Search EFX/EFR Counterexamples (Support5)
+name: EFX/EFR Search - Support5 (5 types: 2,2,2,1,1)
 
 on:
   workflow_dispatch:
@@ -6,53 +6,142 @@ on:
       max_pair_val:
         description: 'Maximum pair value (1-6)'
         required: false
-        default: '6'
-      workers:
-        description: 'Number of workers (0=all cores)'
+        default: '4'
+      num_jobs:
+        description: 'Number of parallel matrix jobs'
+        required: false
+        default: '100'
+      workers_per_job:
+        description: 'Workers per job (multiprocessing)'
         required: false
         default: '2'
-  push:
-    paths:
-      - 'Support5/**'
+      timeout_minutes:
+        description: 'Timeout per job in minutes'
+        required: false
+        default: '360'
 
 jobs:
-  search:
+  setup:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    outputs:
+      shards: ${{ steps.shard.outputs.shards }}
+      total_batches: ${{ steps.shard.outputs.total_batches }}
+    steps:
+      - name: Generate shard list
+        id: shard
+        run: |
+          MAX_PV=${{ github.event.inputs.max_pair_val || 4 }}
 
+          # Compute total batches from max_pair_val
+          # nseq = n*(n+1)*(n+2)/6 where n = max_pair_val
+          # total_batches = nseq^4 * max_pair_val
+          python3 -c "
+          n = int('$MAX_PV')
+          nseq = n * (n+1) * (n+2) // 6
+          total = nseq ** 4 * n
+          print(total)
+          " > /tmp/total_batches.txt
+
+          TOTAL_BATCHES=$(cat /tmp/total_batches.txt)
+          echo "total_batches=$TOTAL_BATCHES" >> "$GITHUB_OUTPUT"
+          echo "Total batches for max_pair_val=$MAX_PV: $TOTAL_BATCHES"
+
+          NUM_JOBS=${{ github.event.inputs.num_jobs || 100 }}
+          BATCH_SIZE=$(( (TOTAL_BATCHES + NUM_JOBS - 1) / NUM_JOBS ))
+
+          SHARDS="["
+          FIRST=true
+          for ((i=0; i<NUM_JOBS; i++)); do
+            START=$((i * BATCH_SIZE))
+            END=$(( (i+1) * BATCH_SIZE ))
+            if [ $END -gt $TOTAL_BATCHES ]; then
+              END=$TOTAL_BATCHES
+            fi
+            if [ $START -ge $TOTAL_BATCHES ]; then
+              break
+            fi
+            if [ "$FIRST" = true ]; then
+              FIRST=false
+            else
+              SHARDS="$SHARDS,"
+            fi
+            SHARDS="$SHARDS\"$START,$END\""
+          done
+          SHARDS="$SHARDS]"
+          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          echo "Shards: $SHARDS"
+
+  search:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 360 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Compile C extension
-        working-directory: Support5
         run: cc -O3 -shared -fPIC -o checker.so checker.c
-
-      - name: Restore checkpoint
-        uses: actions/cache@v4
-        with:
-          path: Support5/results.txt.checkpoint.sqlite3
-          key: support5-checkpoint-${{ github.run_id }}
-          restore-keys: |
-            support5-checkpoint-
+        working-directory: Support5
 
       - name: Run search
         working-directory: Support5
         run: |
-          python main.py --all \
-            --workers ${{ github.event.inputs.workers || '2' }} \
-            --max-pair-val ${{ github.event.inputs.max_pair_val || '6' }}
+          mkdir -p results
+          IFS=',' read -r START END <<< "${{ matrix.shard }}"
+          OUTPUT="results/shard_${START}"
+          python main.py \
+            --all \
+            --workers ${{ github.event.inputs.workers_per_job || 2 }} \
+            --max-pair-val ${{ github.event.inputs.max_pair_val || 4 }} \
+            --task-start "$START" \
+            --task-end "$END" \
+            --output "$OUTPUT" \
+            --no-resume
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: support5-results
-          path: |
-            Support5/results*.txt
-            Support5/results.txt.checkpoint.sqlite3
+          name: results-${{ strategy.job-index }}
+          path: Support5/results/
           retention-days: 30
+
+  merge-results:
+    needs: search
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: all-results
+
+      - name: Merge results
+        run: |
+          mkdir -p results
+          echo "=== EFR-not-EFX counterexamples ===" > results/merged_results.txt
+          cat all-results/*_efr_not_efx.txt >> results/merged_results.txt 2>/dev/null || true
+          echo "" >> results/merged_results.txt
+          echo "=== Neither EFX nor EFR ===" >> results/merged_results.txt
+          cat all-results/*_neither.txt >> results/merged_results.txt 2>/dev/null || true
+
+          EFR_NOT_EFX=$(grep -c "Distribution:" all-results/*_efr_not_efx.txt 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+          NEITHER=$(grep -c "Distribution:" all-results/*_neither.txt 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+          echo "Counterexamples found: efr_not_efx=$EFR_NOT_EFX, neither=$NEITHER"
+
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-results
+          path: results/
+          retention-days: 90
