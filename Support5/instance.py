@@ -29,7 +29,8 @@ GOODS_SIGMA2 = [2, 0, 1, 5, 3, 4, 6, 7]
 def make_goods(dist):
     sA, sB, sC, sD, sE = dist
     assert sA + sB + sC + sD + sE == 8
-    return ['A'] * sA + ['B'] * sB + ['C'] * sC + ['D'] * sD + ['E'] * sE
+    # Paper interleaves: A,B,C,A,B,C,x,y (matching sigma = (0 1 2)(3 4 5))
+    return ['A', 'B', 'C', 'A', 'B', 'C', 'D', 'E']
 
 
 class RankFunction:
