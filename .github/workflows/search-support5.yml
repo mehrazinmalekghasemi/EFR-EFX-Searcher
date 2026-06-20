@@ -6,7 +6,7 @@ on:
       max_pair_val:
         description: 'Maximum pair value (1-6)'
         required: false
-        default: '4'
+        default: '6'
       num_jobs:
         description: 'Number of parallel matrix jobs'
         required: false
