@@ -10,7 +10,7 @@ on:
       num_jobs:
         description: 'Number of parallel matrix jobs'
         required: false
-        default: '100'
+        default: '200'
       workers_per_job:
         description: 'Workers per job (multiprocessing)'
         required: false
@@ -63,7 +63,7 @@ jobs:
   search:
     needs: setup
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 480
     strategy:
       fail-fast: false
       matrix:
