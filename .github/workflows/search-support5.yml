@@ -10,11 +10,11 @@ on:
       num_jobs:
         description: 'Number of parallel matrix jobs'
         required: false
-        default: '200'
+        default: '400'
       workers_per_job:
         description: 'Workers per job (multiprocessing)'
         required: false
-        default: '2'
+        default: '4'
 
 jobs:
   setup:
