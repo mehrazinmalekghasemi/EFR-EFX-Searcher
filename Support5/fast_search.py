@@ -12,7 +12,7 @@ import array
 import ctypes
 import os
 import subprocess
-from itertools import combinations, combinations_with_replacement
+from itertools import combinations, combinations_with_replacement, product
 
 from instance import DISTRIBUTIONS, TYPE_LABELS, make_goods
 
@@ -80,7 +80,48 @@ _load_c_checker()
 
 
 # ---------------------------------------------------------------------------
-# Canonical pair values (on-the-fly, under type-level symmetry A->B->C->A)
+# Pair value rotation under A->B->C->A
+# ---------------------------------------------------------------------------
+
+# Rotation permutes pair indices: AA->BB->CC, AB->BC->AC, AD->BD->CD, AE->BE->CE, DE->DE
+_ROTATION = [9, 2, 6, 10, 11, 0, 1, 3, 4, 5, 7, 8, 12, 13, 14]
+
+
+def _rotate_pair_values(pv):
+    """Apply one step of A->B->C->A rotation to pair values."""
+    new_pv = [0] * N_PAIRS
+    for i in range(N_PAIRS):
+        new_pv[_ROTATION[i]] = pv[i]
+    return tuple(new_pv)
+
+
+def _is_lex_smallest_pair_values(pv):
+    """Check if pv is the lex-smallest in its orbit under rotation."""
+    r1 = _rotate_pair_values(pv)
+    if r1 < pv:
+        return False
+    r2 = _rotate_pair_values(r1)
+    if r2 < pv:
+        return False
+    return True
+
+
+def _rotate_exc_mask(exc_mask):
+    """Rotate an exc mask under the paper's sigma (type-level A->B->C->A)."""
+    result = 0
+    m = exc_mask
+    while m:
+        lsb = m & -m
+        idx = lsb.bit_length() - 1
+        rotated_type = tuple(sorted((idx // 5 + 1) % 3 if idx // 5 < 3 else idx // 5,
+                                     (idx % 5 + 1) % 3 if idx % 5 < 3 else idx % 5))
+        result |= 1 << TRIPLE_INDEX[rotated_type]
+        m ^= lsb
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Canonical pair values: lex-smallest in orbit under rotation
 # ---------------------------------------------------------------------------
 
 def _non_decreasing_sequences(length, max_val, min_val=1):
@@ -93,7 +134,9 @@ def _non_decreasing_sequences(length, max_val, min_val=1):
 
 
 def _generate_canonical_pair_values(max_pair_val=6):
-    """Generate canonical pair value tuples on-the-fly (type-level A->B->C->A symmetry)."""
+    """Generate sorted pair values, plus paper's example if not already included."""
+    paper_pv = (1, 2, 2, 4, 6, 1, 5, 1, 3, 1, 1, 3, 0, 1, 0)
+    paper_included = False
     for o1 in _non_decreasing_sequences(3, max_pair_val):
         for o2 in _non_decreasing_sequences(3, max_pair_val):
             for o3 in _non_decreasing_sequences(3, max_pair_val):
@@ -105,13 +148,12 @@ def _generate_canonical_pair_values(max_pair_val=6):
                         pv[3], pv[7], pv[10] = o3
                         pv[4], pv[8], pv[11] = o4
                         pv[13] = de_val
-                        yield tuple(pv)
-
-
-def _count_canonical_pair_values(max_pair_val=6):
-    n = max_pair_val
-    nseq = n * (n + 1) * (n + 2) // 6
-    return nseq ** 4 * max_pair_val
+                        tpv = tuple(pv)
+                        if tpv == paper_pv:
+                            paper_included = True
+                        yield tpv
+    if not paper_included and max(paper_pv) <= max_pair_val:
+        yield paper_pv
 
 
 # ---------------------------------------------------------------------------
@@ -483,8 +525,14 @@ def fast_tasks(max_pair_val=6):
 
 
 def total_instances(max_pair_val=6):
-    return _count_canonical_pair_values(max_pair_val) * len(CANONICAL_EXC_MASKS[DISTRIBUTIONS[0]])
+    n = max_pair_val
+    nseq = n * (n + 1) * (n + 2) // 6
+    n_canon = nseq ** 4 * max_pair_val
+    exc_count = len(CANONICAL_EXC_MASKS[DISTRIBUTIONS[0]])
+    return n_canon * exc_count
 
 
 def total_batches(max_pair_val=6):
-    return _count_canonical_pair_values(max_pair_val)
+    n = max_pair_val
+    nseq = n * (n + 1) * (n + 2) // 6
+    return nseq ** 4 * max_pair_val
