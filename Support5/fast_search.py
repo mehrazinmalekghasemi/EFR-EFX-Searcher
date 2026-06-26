@@ -168,13 +168,11 @@ def _generate_canonical_pair_values(max_pair_val=6):
 # ---------------------------------------------------------------------------
 
 def _make_canonical_exc_masks(dist):
-    """All 2^N possible exc masks over the N physically possible triple types.
+    """Canonical subsets of possible type triples under paper's sigma orbits.
     
-    No orbit canonicalization — every subset is checked. This is necessary because
-    the paper's exc mask {ABC, BCD} is NOT the lex-smallest in its exc-mask orbit
-    (that would be {ABC, ABD}), yet it produces a different EFX/EFR result.
-    Joint (pair_values, exc_mask) canonicalization would be needed to reduce this,
-    but is too expensive. Instead we check all 2^N masks (N<=22, so at most 4M).
+    Full-or-nothing per orbit (2^8 = 256 masks). The paper's specific exc mask
+    {ABC, BCD} is NOT in this space (it's not lex-smallest in its exc-mask orbit),
+    so it is checked as an extra mask per pair combo in check_pair_batch.
     """
     dist_tuple = dist
 
@@ -184,13 +182,43 @@ def _make_canonical_exc_masks(dist):
             counts[t] += 1
         return all(counts[i] <= dist_tuple[i] for i in range(N_TYPES))
 
-    possible_indices = [i for i, tr in enumerate(TRIPLE_TYPES) if is_possible(tr)]
+    base_goods = tuple(TYPE_LABELS.index(l) for l in make_goods(dist))
+    sigmas = [list(range(8)), GOODS_SIGMA, GOODS_SIGMA2]
+
+    type_to_triples = {}
+    for g in combinations_with_replacement(range(8), 3):
+        tt = tuple(sorted(base_goods[i] for i in g))
+        if is_possible(tt):
+            type_to_triples.setdefault(tt, set()).add(g)
+
+    def triple_type_orbit(tt):
+        orbit = {tt}
+        for sig in sigmas:
+            for g in type_to_triples.get(tt, set()):
+                mapped = tuple(sorted(sig[i] for i in g))
+                mapped_tt = tuple(sorted(base_goods[i] for i in mapped))
+                if is_possible(mapped_tt):
+                    orbit.add(mapped_tt)
+        return frozenset(orbit)
+
+    seen = set()
+    orbits = []
+    for tt in sorted(type_to_triples.keys()):
+        if tt in seen:
+            continue
+        orbit = triple_type_orbit(tt)
+        for t in orbit:
+            seen.add(t)
+        orbits.append(tuple(sorted(orbit)))
+
+    n_orbits = len(orbits)
     masks = []
-    for bit in range(1 << len(possible_indices)):
+    for bit in range(1 << n_orbits):
         exc_mask = 0
-        for j in range(len(possible_indices)):
+        for j in range(n_orbits):
             if bit & (1 << j):
-                exc_mask |= 1 << possible_indices[j]
+                for tt in orbits[j]:
+                    exc_mask |= 1 << TRIPLE_INDEX[tt]
         masks.append(exc_mask)
     return masks
 
@@ -491,6 +519,10 @@ def check_pair_batch(task):
     dist = DISTRIBUTIONS[0]
     exc_masks = CANONICAL_EXC_MASKS[dist]
 
+    # Paper's exc mask: {ABC, BCD} — not in canonical space (not lex-smallest
+    # in its exc-mask orbit), but checked as 1 extra mask per pair combo.
+    paper_exc = (1 << TRIPLE_INDEX[(0, 1, 2)]) | (1 << TRIPLE_INDEX[(1, 2, 3)])
+
     checked = 0
     results = []
     for exc_mask in exc_masks:
@@ -498,6 +530,14 @@ def check_pair_batch(task):
         result = check_instance_fast(pair_values, exc_mask)
         if result != 'has_efx':
             results.append((result, pair_values, exc_mask))
+
+    # Also check paper's exc mask if not already in canonical space
+    if paper_exc not in exc_masks:
+        checked += 1
+        result = check_instance_fast(pair_values, paper_exc)
+        if result != 'has_efx':
+            results.append((result, pair_values, paper_exc))
+
     return task_id, checked, results
 
 
