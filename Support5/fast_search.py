@@ -134,9 +134,15 @@ def _non_decreasing_sequences(length, max_val, min_val=1):
 
 
 def _generate_canonical_pair_values(max_pair_val=6):
-    """Generate sorted pair values, plus paper's example if not already included."""
-    paper_pv = (1, 2, 2, 4, 6, 1, 5, 1, 3, 1, 1, 3, 0, 1, 0)
-    paper_included = False
+    """
+    Generate ALL pair values that are lex-smallest in their rotation orbit.
+
+    Approach: generate non-decreasing per-orbit PVs (33M for max_pair_val=6),
+    compute the orbit lex-smallest min(pv, rotate(pv), rotate²(pv)) for each,
+    and yield unique results. This naturally includes every possible pair value
+    that is lex-smallest in its orbit.
+    """
+    seen = set()
     for o1 in _non_decreasing_sequences(3, max_pair_val):
         for o2 in _non_decreasing_sequences(3, max_pair_val):
             for o3 in _non_decreasing_sequences(3, max_pair_val):
@@ -149,11 +155,12 @@ def _generate_canonical_pair_values(max_pair_val=6):
                         pv[4], pv[8], pv[11] = o4
                         pv[13] = de_val
                         tpv = tuple(pv)
-                        if tpv == paper_pv:
-                            paper_included = True
-                        yield tpv
-    if not paper_included and max(paper_pv) <= max_pair_val:
-        yield paper_pv
+                        r1 = _rotate_pair_values(tpv)
+                        r2 = _rotate_pair_values(r1)
+                        lex_smallest = min(tpv, r1, r2)
+                        if lex_smallest not in seen:
+                            seen.add(lex_smallest)
+                            yield lex_smallest
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +168,14 @@ def _generate_canonical_pair_values(max_pair_val=6):
 # ---------------------------------------------------------------------------
 
 def _make_canonical_exc_masks(dist):
-    """Canonical subsets of possible type triples under paper's sigma orbits."""
+    """All 2^N possible exc masks over the N physically possible triple types.
+    
+    No orbit canonicalization — every subset is checked. This is necessary because
+    the paper's exc mask {ABC, BCD} is NOT the lex-smallest in its exc-mask orbit
+    (that would be {ABC, ABD}), yet it produces a different EFX/EFR result.
+    Joint (pair_values, exc_mask) canonicalization would be needed to reduce this,
+    but is too expensive. Instead we check all 2^N masks (N<=22, so at most 4M).
+    """
     dist_tuple = dist
 
     def is_possible(triple):
@@ -170,48 +184,20 @@ def _make_canonical_exc_masks(dist):
             counts[t] += 1
         return all(counts[i] <= dist_tuple[i] for i in range(N_TYPES))
 
-    base_goods = tuple(TYPE_LABELS.index(l) for l in make_goods(dist))
-    sigmas = [list(range(8)), GOODS_SIGMA, GOODS_SIGMA2]
-
-    type_to_triples = {}
-    for g in combinations_with_replacement(range(8), 3):
-        tt = tuple(sorted(base_goods[i] for i in g))
-        if is_possible(tt):
-            type_to_triples.setdefault(tt, set()).add(g)
-
-    def triple_type_orbit(tt):
-        orbit = {tt}
-        for sig in sigmas:
-            for g in type_to_triples.get(tt, set()):
-                mapped = tuple(sorted(sig[i] for i in g))
-                mapped_tt = tuple(sorted(base_goods[i] for i in mapped))
-                if is_possible(mapped_tt):
-                    orbit.add(mapped_tt)
-        return frozenset(orbit)
-
-    seen = set()
-    orbits = []
-    for tt in sorted(type_to_triples.keys()):
-        if tt in seen:
-            continue
-        orbit = triple_type_orbit(tt)
-        for t in orbit:
-            seen.add(t)
-        orbits.append(tuple(sorted(orbit)))
-
-    n_orbits = len(orbits)
+    possible_indices = [i for i, tr in enumerate(TRIPLE_TYPES) if is_possible(tr)]
     masks = []
-    for bit in range(1 << n_orbits):
+    for bit in range(1 << len(possible_indices)):
         exc_mask = 0
-        for j in range(n_orbits):
+        for j in range(len(possible_indices)):
             if bit & (1 << j):
-                for tt in orbits[j]:
-                    exc_mask |= 1 << TRIPLE_INDEX[tt]
+                exc_mask |= 1 << possible_indices[j]
         masks.append(exc_mask)
     return masks
 
 
-CANONICAL_EXC_MASKS = {dist: _make_canonical_exc_masks(dist) for dist in DISTRIBUTIONS}
+CANONICAL_EXC_MASKS = {}
+for _dist in DISTRIBUTIONS:
+    CANONICAL_EXC_MASKS[_dist] = _make_canonical_exc_masks(_dist)
 
 
 # ---------------------------------------------------------------------------
