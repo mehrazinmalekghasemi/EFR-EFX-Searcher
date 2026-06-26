@@ -10,7 +10,7 @@ on:
       num_jobs:
         description: 'Number of parallel matrix jobs'
         required: false
-        default: '400'
+        default: '256'
       workers_per_job:
         description: 'Workers per job (multiprocessing)'
         required: false
@@ -26,9 +26,9 @@ jobs:
         id: shard
         run: |
           MPV="${{ github.event.inputs.max_pair_val }}"
-          MPV="${MPV:-4}"
+          MPV="${MPV:-6}"
           NUM_JOBS="${{ github.event.inputs.num_jobs }}"
-          NUM_JOBS="${NUM_JOBS:-100}"
+          NUM_JOBS="${NUM_JOBS:-256}"
 
           TOTAL_BATCHES=$(python3 -c "
           n = int('${MPV}')
@@ -88,7 +88,7 @@ jobs:
           MPV="${{ github.event.inputs.max_pair_val }}"
           MPV="${MPV:-4}"
           WPP="${{ github.event.inputs.workers_per_job }}"
-          WPP="${WPP:-2}"
+          WPP="${WPP:-4}"
           python main.py \
             --all \
             --workers "$WPP" \
