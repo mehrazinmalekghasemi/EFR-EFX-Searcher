@@ -14,7 +14,7 @@ on:
       workers_per_job:
         description: 'Workers per job (multiprocessing)'
         required: false
-        default: '4'
+        default: '2'
 
 jobs:
   setup:
@@ -88,7 +88,7 @@ jobs:
           MPV="${{ github.event.inputs.max_pair_val }}"
           MPV="${MPV:-4}"
           WPP="${{ github.event.inputs.workers_per_job }}"
-          WPP="${WPP:-4}"
+          WPP="${WPP:-2}"
           python main.py \
             --all \
             --workers "$WPP" \
