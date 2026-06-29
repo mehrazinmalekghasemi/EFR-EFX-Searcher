@@ -1,12 +1,12 @@
-name: EFX/EFR Search - Support5
+name: EFX/EFR Search - Support5 (vary singletons)
 
 on:
   workflow_dispatch:
     inputs:
       max_pair_val:
-        description: 'Maximum pair value (1-6)'
+        description: 'Maximum pair value (1-6). Use 4 for practical runtime.'
         required: false
-        default: '6'
+        default: '4'
       num_jobs:
         description: 'Number of parallel matrix jobs'
         required: false
@@ -30,12 +30,17 @@ jobs:
           NUM_JOBS="${{ github.event.inputs.num_jobs }}"
           NUM_JOBS="${NUM_JOBS:-256}"
 
-          TOTAL_BATCHES=$(python3 -c "
+          # Singletons=1 batch count + singleton combos * pair combos
+          PAIR_BATCHES=$(python3 -c "
           n = int('${MPV}')
           nseq = n * (n+1) * (n+2) // 6
           print(nseq ** 4 * n)
           ")
+          N_SINGLETONS=2016
+          TOTAL_BATCHES=$(( PAIR_BATCHES * N_SINGLETONS ))
 
+          echo "Pair batches per singleton: $PAIR_BATCHES"
+          echo "Singleton combos: $N_SINGLETONS"
           echo "Total batches: $TOTAL_BATCHES"
           BATCH_SIZE=$(( (TOTAL_BATCHES + NUM_JOBS - 1) / NUM_JOBS ))
 
@@ -86,11 +91,12 @@ jobs:
           IFS=',' read -r START END <<< "${{ matrix.shard }}"
           OUTPUT="results/shard_${START}"
           MPV="${{ github.event.inputs.max_pair_val }}"
-          MPV="${MPV:-4}"
+          MPV="${MPV:-6}"
           WPP="${{ github.event.inputs.workers_per_job }}"
           WPP="${WPP:-2}"
           python main.py \
             --all \
+            --vary-singletons \
             --workers "$WPP" \
             --max-pair-val "$MPV" \
             --task-start "$START" \

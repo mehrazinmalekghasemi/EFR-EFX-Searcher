@@ -3,17 +3,14 @@ main.py
 -------
 Search for EFX/EFR counterexamples with 5 types of goods (2,2,2,1,1).
 
-Features:
-  - Multiprocessing: --workers 0 uses all CPU cores
-  - Checkpointing: progress saved to SQLite, resume on interruption
-  - Early stopping: finds one no-EFX and one no-EFR instance, then stops
-  - On-the-fly canonical pair value generation (no precomputed storage)
+Two modes:
+  1. Singletons fixed at 1 (default): fast, ~15B instances
+  2. Vary singletons (--vary-singletons): exhaustive, much larger
 
 Usage:
     python main.py --all --workers 0
-    python main.py --all --workers 2
-    python main.py --all --workers 0 --no-resume
-    python main.py --max-pair-val 4 --workers 0
+    python main.py --all --workers 2 --max-pair-val 4
+    python main.py --all --vary-singletons --workers 0
 """
 
 import argparse
@@ -25,7 +22,8 @@ from os import path
 
 from fast_search import (
     check_pair_batch, fast_tasks, total_batches, total_instances,
-    format_instance, CANONICAL_EXC_MASKS,
+    format_instance, CANONICAL_EXC_MASKS, generate_singleton_combos,
+    count_singleton_combos,
 )
 from instance import DISTRIBUTIONS
 
@@ -101,8 +99,8 @@ def write_results(conn, output_file):
     return counts
 
 
-def process_result(result_type, pv, em, no_efx, no_efr, conn):
-    formatted = format_instance(pv, em)
+def process_result(result_type, pv, em, sv, no_efx, no_efr, conn):
+    formatted = format_instance(pv, em, sv)
     if result_type == 'efr_not_efx':
         if not no_efx:
             no_efx = True
@@ -120,21 +118,24 @@ def process_result(result_type, pv, em, no_efx, no_efr, conn):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Search for EFX/EFR counterexamples (5 types: 2,2,2,1,1)")
+    parser = argparse.ArgumentParser(
+        description="Search for EFX/EFR counterexamples (5 types: 2,2,2,1,1)")
     parser.add_argument('--all', action='store_true', help='Run the search')
     parser.add_argument('--output', default='results.txt', help='Output file base name')
     parser.add_argument('--workers', type=int, default=1,
                         help='Parallel workers. 0 = all CPU cores. Default: 1')
     parser.add_argument('--max-pair-val', type=int, default=6,
-                        help='Maximum pair value (1-6). Default: 6. Lower = faster.')
+                        help='Maximum pair value (1-6). Default: 6.')
+    parser.add_argument('--vary-singletons', action='store_true',
+                        help='Search over all singleton value combos (much larger)')
     parser.add_argument('--sleep', type=float, default=0,
-                        help='Seconds to sleep between batches (CPU throttling). Default: 0')
+                        help='Seconds to sleep between batches. Default: 0')
     parser.add_argument('--no-resume', action='store_true',
                         help='Ignore existing checkpoint')
     parser.add_argument('--task-start', type=int, default=0,
-                        help='First task_id to process (inclusive). For splitting.')
+                        help='First task_id to process (inclusive).')
     parser.add_argument('--task-end', type=int, default=None,
-                        help='Last task_id to process (exclusive). For splitting.')
+                        help='Last task_id to process (exclusive).')
     args = parser.parse_args()
 
     if not args.all:
@@ -145,19 +146,26 @@ def main():
         print("--max-pair-val must be between 1 and 6")
         sys.exit(1)
 
-    distributions = DISTRIBUTIONS
     workers = cpu_count() if args.workers == 0 else args.workers
     db_path = checkpoint_file(args.output)
     conn = init_checkpoint(db_path)
     done_ids = set() if args.no_resume else completed_task_ids(conn)
 
-    all_expected_batches = total_batches(args.max_pair_val)
-    all_expected = total_instances(args.max_pair_val)
+    # Build singleton combos
+    if args.vary_singletons:
+        singleton_combos = list(generate_singleton_combos())
+        n_singletons = len(singleton_combos)
+    else:
+        singleton_combos = None
+        n_singletons = 1
+
+    all_expected_batches = total_batches(args.max_pair_val, n_singletons)
+    all_expected = total_instances(args.max_pair_val, n_singletons)
     task_end = args.task_end if args.task_end is not None else all_expected_batches
 
     expected_batches_in_range = max(0, task_end - args.task_start)
-    n_exc = len(CANONICAL_EXC_MASKS[distributions[0]])
-    expected = expected_batches_in_range * n_exc if distributions else 0
+    n_exc = len(CANONICAL_EXC_MASKS[DISTRIBUTIONS[0]])
+    expected = expected_batches_in_range * (n_exc + 1) if DISTRIBUTIONS else 0
 
     total_checked = sum(
         row[0] for row in conn.execute("SELECT checked FROM completed_batches")
@@ -173,15 +181,16 @@ def main():
             next_report += 100000
 
     def pending():
-        for ft_id, pv in fast_tasks(args.max_pair_val):
+        for ft_id, pv, sv in fast_tasks(args.max_pair_val, singleton_combos):
             if ft_id < args.task_start:
                 continue
             if ft_id >= task_end:
                 break
             if ft_id not in done_ids:
-                yield ft_id, pv
+                yield ft_id, pv, sv
 
-    print(f"Search: distribution (2,2,2,1,1), max_pair_val={args.max_pair_val}")
+    mode = "vary-singletons" if args.vary_singletons else "singletons=1"
+    print(f"Search: distribution (2,2,2,1,1), mode={mode}, max_pair_val={args.max_pair_val}")
     print(f"Workers: {workers}")
     print(f"Task range: [{args.task_start}, {task_end}) of {all_expected_batches}")
     print(f"Instances in range: {expected:,}")
@@ -193,9 +202,9 @@ def main():
             for task_id, checked_batch, results in map(check_pair_batch, pending()):
                 total_checked += checked_batch
                 save_batch(conn, task_id, checked_batch)
-                for result_type, pv, em in results:
+                for result_type, pv, em, sv in results:
                     no_efx, no_efr = process_result(
-                        result_type, pv, em, no_efx, no_efr, conn
+                        result_type, pv, em, sv, no_efx, no_efr, conn
                     )
                 if args.sleep > 0:
                     time.sleep(args.sleep)
@@ -213,9 +222,9 @@ def main():
                 ):
                     total_checked += checked_batch
                     save_batch(conn, task_id, checked_batch)
-                    for result_type, pv, em in results:
+                    for result_type, pv, em, sv in results:
                         no_efx, no_efr = process_result(
-                            result_type, pv, em, no_efx, no_efr, conn
+                            result_type, pv, em, sv, no_efx, no_efr, conn
                         )
                     if args.sleep > 0:
                         time.sleep(args.sleep)

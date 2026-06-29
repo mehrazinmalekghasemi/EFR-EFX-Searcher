@@ -290,6 +290,7 @@ def _build_dist_tables(dist):
         'triple_pairs': tuple(triple_pairs),
         'large_triples': tuple(large_triples),
         'large_exc_masks': tuple(large_exc_masks),
+        'goods': goods_by_agent,
     }
 
 
@@ -306,7 +307,7 @@ def _get_dist_tables(dist):
 # Value computation (exc mask same for all agents with paper's sigma)
 # ---------------------------------------------------------------------------
 
-def _values_for_agent(tables, agent, pair_values, exc_mask):
+def _values_for_agent(tables, agent, pair_values, exc_mask, singleton_vals=None):
     values = [0] * 256
     pi = tables['pair_idx'][agent]
     ti = tables['triple_idx'][agent]
@@ -314,8 +315,13 @@ def _values_for_agent(tables, agent, pair_values, exc_mask):
     lt = tables['large_triples'][agent]
     le = tables['large_exc_masks'][agent]
 
-    for mask in MASKS_BY_SIZE[1]:
-        values[mask] = 1
+    if singleton_vals is None:
+        for mask in MASKS_BY_SIZE[1]:
+            values[mask] = 1
+    else:
+        for mask in MASKS_BY_SIZE[1]:
+            gs = [g for g in range(8) if mask & (1 << g)]
+            values[mask] = singleton_vals[tables['goods'][agent][gs[0]]]
     for mask in MASKS_BY_SIZE[2]:
         values[mask] = pair_values[pi[mask]]
     for mask in MASKS_BY_SIZE[3]:
@@ -453,15 +459,17 @@ def _masks_to_alloc(alloc):
 # Format instance for output
 # ---------------------------------------------------------------------------
 
-def format_instance(pair_values, exc_mask):
+def format_instance(pair_values, exc_mask, singleton_vals=None):
     pair_dict = {PAIR_LABELS[i]: pair_values[i] for i in range(N_PAIRS) if pair_values[i] > 0}
     exceptional = {
         TRIPLE_LABELS[i] for i in range(N_TRIPLES) if exc_mask & (1 << i)
     }
+    if singleton_vals is None:
+        singleton_vals = {'A': 1, 'B': 1, 'C': 1, 'D': 1, 'E': 1}
     lines = []
     lines.append(f"Distribution: (2, 2, 2, 1, 1)")
     lines.append(f"Sigma: (0 1 2)(3 4 5) on goods")
-    lines.append(f"Singletons: {{'A': 1, 'B': 1, 'C': 1, 'D': 1, 'E': 1}}")
+    lines.append(f"Singletons: {singleton_vals}")
     lines.append(f"Pair values: {pair_dict}")
     lines.append(f"Exceptional triples: {exceptional}")
     return "\n".join(lines)
@@ -471,10 +479,10 @@ def format_instance(pair_values, exc_mask):
 # Check instance (C fast path or Python fallback)
 # ---------------------------------------------------------------------------
 
-def check_instance_fast(pair_values, exc_mask):
+def check_instance_fast(pair_values, exc_mask, singleton_vals=None):
     dist = DISTRIBUTIONS[0]
     tables = _get_dist_tables(dist)
-    values = [_values_for_agent(tables, a, pair_values, exc_mask) for a in range(3)]
+    values = [_values_for_agent(tables, a, pair_values, exc_mask, singleton_vals) for a in range(3)]
 
     if _lib is not None:
         mw_sw = _summary_tables(values)
@@ -515,7 +523,7 @@ def check_instance_fast(pair_values, exc_mask):
 # ---------------------------------------------------------------------------
 
 def check_pair_batch(task):
-    task_id, pair_values = task
+    task_id, pair_values, singleton_vals = task
     dist = DISTRIBUTIONS[0]
     exc_masks = CANONICAL_EXC_MASKS[dist]
 
@@ -527,38 +535,67 @@ def check_pair_batch(task):
     results = []
     for exc_mask in exc_masks:
         checked += 1
-        result = check_instance_fast(pair_values, exc_mask)
+        result = check_instance_fast(pair_values, exc_mask, singleton_vals)
         if result != 'has_efx':
-            results.append((result, pair_values, exc_mask))
+            results.append((result, pair_values, exc_mask, singleton_vals))
 
     # Also check paper's exc mask if not already in canonical space
     if paper_exc not in exc_masks:
         checked += 1
-        result = check_instance_fast(pair_values, paper_exc)
+        result = check_instance_fast(pair_values, paper_exc, singleton_vals)
         if result != 'has_efx':
-            results.append((result, pair_values, paper_exc))
+            results.append((result, pair_values, paper_exc, singleton_vals))
 
     return task_id, checked, results
+
+
+# ---------------------------------------------------------------------------
+# Singleton value combos (canonical: s_A <= s_B <= s_C, s_D, s_E free)
+# ---------------------------------------------------------------------------
+
+def generate_singleton_combos():
+    """Generate all canonical singleton value combos.
+    
+    Canonical form: s_A <= s_B <= s_C (cyclic types), s_D and s_E free.
+    Each value in {1, ..., 6}.
+    """
+    for sD in range(1, 7):
+        for sE in range(1, 7):
+            for sA in range(1, 7):
+                for sB in range(sA, 7):
+                    for sC in range(sB, 7):
+                        yield {'A': sA, 'B': sB, 'C': sC, 'D': sD, 'E': sE}
+
+
+def count_singleton_combos():
+    """Count canonical singleton combos: C(8,3) * 6 * 6 = 56 * 36 = 2016."""
+    return 56 * 36
 
 
 # ---------------------------------------------------------------------------
 # Task generation
 # ---------------------------------------------------------------------------
 
-def fast_tasks(max_pair_val=6):
-    for task_id, pv in enumerate(_generate_canonical_pair_values(max_pair_val)):
-        yield task_id, pv
+def fast_tasks(max_pair_val=6, singleton_combos=None):
+    """Generate tasks. If singleton_combos is None, singletons are fixed at 1."""
+    if singleton_combos is None:
+        singleton_combos = [None]  # None means all singletons = 1
+
+    for sv in singleton_combos:
+        for task_id, pv in enumerate(_generate_canonical_pair_values(max_pair_val)):
+            yield task_id, pv, sv
 
 
-def total_instances(max_pair_val=6):
+def total_instances(max_pair_val=6, n_singletons=1):
     n = max_pair_val
     nseq = n * (n + 1) * (n + 2) // 6
     n_canon = nseq ** 4 * max_pair_val
     exc_count = len(CANONICAL_EXC_MASKS[DISTRIBUTIONS[0]])
-    return n_canon * exc_count
+    return n_singletons * n_canon * (exc_count + 1)
 
 
-def total_batches(max_pair_val=6):
+def total_batches(max_pair_val=6, n_singletons=1):
     n = max_pair_val
     nseq = n * (n + 1) * (n + 2) // 6
+    return n_singletons * nseq ** 4 * max_pair_val
     return nseq ** 4 * max_pair_val
